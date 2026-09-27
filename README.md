@@ -55,7 +55,29 @@ python3 ezviz_record.py <SERIAL> <CHANNEL> \
 python3 ezviz_snap.py <SERIAL> --out snapshots/
 ```
 
-### Find your NVR serial number
+### Discover all NVRs and channels
+
+```bash
+python3 ezviz_devices.py --account your@email.com --password yourpass
+```
+
+Output:
+```
+Found 2 NVR(s)
+
+NVR: Shop Camera
+  Serial : FK2335516
+  Channels (4):
+    ch43  kassa 1               [online]
+    ch46  kassa 3               [online]
+    ch47  kassa 2               [online]
+    ch48  entrance              [offline]
+
+  # Record channel example:
+  python3 ezviz_record.py FK2335516 43 --out-dir recordings --segment-time 1800 --seconds 0
+```
+
+### Find your NVR serial number manually
 
 Log in to the EZVIZ app → Device settings → Device serial number. It looks like `FK2335516` or `E20692995`.
 
