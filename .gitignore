@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.py[cod]
+*.mp4
+*.jpg
+*.h265
+snapshots/
+recordings/
