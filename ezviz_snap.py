@@ -75,46 +75,80 @@ def rtp_payload(p: bytes) -> bytes:
 
 def depay_hevc(pkts) -> bytes:
     out = bytearray()
+    fu_buf: bytearray | None = None
+    fu_hdr = b""
     for p in pkts:
-        # Skip PT=112 control packets
         if len(p) < 2 or (p[1] & 0x7F) != 96:
             continue
         pl = rtp_payload(p)
         if len(pl) < 2:
             continue
         t = (pl[0] >> 1) & 0x3F
+        marker = bool(p[1] & 0x80)
         if t < 48:
+            fu_buf = None
             out += b"\x00\x00\x00\x01" + pl
         elif t == 48:
+            fu_buf = None
             i = 2
             while i + 2 <= len(pl):
                 s = int.from_bytes(pl[i:i + 2], "big"); i += 2
                 out += b"\x00\x00\x00\x01" + pl[i:i + s]; i += s
         elif t == 49 and len(pl) >= 3:
             f = pl[2]
-            if f & 0x80:
-                out += b"\x00\x00\x00\x01" + bytes([(pl[0] & 0x81) | ((f & 0x3F) << 1), pl[1]]) + pl[3:]
-            else:
-                out += pl[3:]
+            if f & 0x80:  # start
+                fu_buf = bytearray(pl[3:])
+                fu_hdr = bytes([(pl[0] & 0x81) | ((f & 0x3F) << 1), pl[1]])
+            elif fu_buf is not None:  # continuation or end
+                fu_buf += pl[3:]
+                if marker or (f & 0x40):  # end bit
+                    out += b"\x00\x00\x00\x01" + fu_hdr + bytes(fu_buf)
+                    fu_buf = None
     return bytes(out)
 
 
-def collect_gop(c, serial, channel, max_packets=1200, max_seconds=14.0, timeout=8.0):
+def collect_gop(c, serial, channel, max_packets=2000, max_seconds=30.0, timeout=8.0):
+    """Collect packets from the next clean GOP: VPS → SPS → PPS → complete IDR."""
     pkts = []
-    vps_seen = 0
+    vps_idx = -1
+    idr_started = False
+    idr_done = False
     t0 = time.time()
     with open_cloud_stream(c, serial, channel=channel, refresh_vtm=True, timeout=timeout) as st:
         st.start()
         for b in st.iter_payloads(max_packets=max_packets):
             pkts.append(b)
-            if len(b) >= 2 and (b[1] & 0x7F) == 96:
-                pl = rtp_payload(b)
-                if len(pl) >= 2 and ((pl[0] >> 1) & 0x3F) == 32:
-                    vps_seen += 1
-                    if vps_seen >= 2 and len(pkts) > 30:
-                        break
+            if len(b) < 2 or (b[1] & 0x7F) != 96:
+                continue
+            pl = rtp_payload(b)
+            if len(pl) < 2:
+                continue
+            t = (pl[0] >> 1) & 0x3F
+            marker = bool(b[1] & 0x80)
+
+            if t == 32:  # VPS — new GOP boundary, reset
+                vps_idx = len(pkts) - 1
+                idr_started = False
+                idr_done = False
+
+            if vps_idx >= 0:
+                if t == 49 and len(pl) >= 3:  # FU
+                    fu_type = pl[2] & 0x3F
+                    if fu_type in (19, 20) and (pl[2] & 0x80):  # IDR FU-start
+                        idr_started = True
+                    if idr_started and marker:
+                        idr_done = True
+                elif t in (19, 20) and marker:  # single-NAL IDR
+                    idr_done = True
+
+                if idr_done:
+                    break
+
             if time.time() - t0 > max_seconds:
                 break
+
+    if vps_idx >= 0:
+        return pkts[vps_idx:]
     return pkts
 
 
