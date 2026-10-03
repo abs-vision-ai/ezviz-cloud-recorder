@@ -4,6 +4,10 @@
 Usage:
     python3 ezviz_devices.py --account LOGIN --password PAROL
 
+    # Accept a pending NVR share (usually not needed — EZVIZ auto-accepts,
+    # but use this if a device was shared and isn't showing up):
+    python3 ezviz_devices.py --account ... --password ... --accept C12345678
+
     # Then record from a discovered channel:
     python3 ezviz_record.py <SERIAL> <CHANNEL> --account LOGIN --password PAROL ...
 
@@ -11,6 +15,10 @@ Credentials (any of these):
     --account / --password flags
     EZ_ACC / EZ_PWD environment variables
     .env file with EZ_ACC=... and EZ_PWD=...
+
+Note on NVR sharing:
+    EZVIZ accounts (ezvizlife.com) accept shared NVRs automatically — no --accept needed.
+    Hik-Connect accounts (hik-connect.com) require explicit --accept after each new share.
 """
 from __future__ import annotations
 import argparse, os
@@ -29,6 +37,19 @@ def _load_dotenv():
                     os.environ.setdefault(k.strip(), v.strip())
     except FileNotFoundError:
         pass
+
+
+def accept_share(c: EzvizClient, serial: str):
+    """Accept a pending device share invitation."""
+    try:
+        result = c.share_accept(serial)
+        code = result.get("meta", {}).get("code", "?")
+        if code == 200:
+            print(f"  [OK] Share accepted: {serial}")
+        else:
+            print(f"  [WARN] share_accept returned: {result}")
+    except Exception as e:
+        print(f"  [FAIL] share_accept {serial}: {e}")
 
 
 def list_devices(account: str, password: str, region: str):
@@ -97,10 +118,18 @@ def main():
                     help="EZVIZ password. Also: EZ_PWD env var.")
     ap.add_argument("--region", default=os.environ.get("EZ_REGION", "apiisgp.ezvizlife.com"),
                     help="API region host (default: apiisgp.ezvizlife.com)")
+    ap.add_argument("--accept", metavar="SERIAL",
+                    help="Accept a pending NVR share by serial number.")
     args = ap.parse_args()
 
     if not args.account or not args.password:
         ap.error("--account and --password are required (or set EZ_ACC / EZ_PWD env vars)")
+
+    if args.accept:
+        c = EzvizClient(args.account, args.password, args.region)
+        c.login()
+        accept_share(c, args.accept)
+        print("Re-listing devices after accept...")
 
     list_devices(args.account, args.password, args.region)
 
